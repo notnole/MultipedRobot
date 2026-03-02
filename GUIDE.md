@@ -1,4 +1,6 @@
-# Code Guide for Teammate
+# Code Guide 
+
+**Tip:** Open the actual code files side by side while reading this. For both files, first skim through the code on its own to get a feel for the structure, then come back here for the detailed explanation.
 
 ## How the system works (big picture)
 
@@ -9,7 +11,7 @@ There are **two separate programs** that work together:
 ```
 
 - **`servo_control.py`** (runs on your laptop) — Listens to your keyboard and sends single letters (like `w`, `a`, `d`, `1`, etc) over the USB cable to the Arduino.
-- **`servo_test.ino`** (runs on the Arduino board) — Receives those letters and actually moves the servos.
+- **`servo_control.ino`** (runs on the Arduino board) — Receives those letters and actually moves the servos.
 
 **Why two programs?** The Arduino is a tiny microcontroller — it can't listen to your keyboard directly. It can only read bytes from the USB serial connection. So we need Python on the PC side to capture keypresses and forward them as serial bytes.
 
@@ -17,7 +19,7 @@ The Arduino code is already uploaded to the board. You only need to change it if
 
 ---
 
-## servo_test.ino — Line by line
+## servo_control.ino — Line by line
 
 This is written in C/C++ (Arduino language). It runs on the Arduino board in an infinite loop.
 
