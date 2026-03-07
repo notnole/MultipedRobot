@@ -8,6 +8,7 @@
 #   Each row is a full snapshot of active commands (e.g. "w+d", "w+2").
 #   Only changes are logged. Edit the CSV to fine-tune timing.
 # Replay: python servo_control.py --replay log/<file.csv>
+# Dry run: python servo_control.py --dry-run  (no Arduino needed)
 #
 # Requires: pip install pyserial pynput
 
@@ -22,17 +23,24 @@ from datetime import datetime
 PORT = 'COM3'
 BAUD = 9600
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'log')
+DRY_RUN = '--dry-run' in sys.argv
 
 HOLD_CMDS = {'w', 's', 'a', 'd'}
 # Arduino command to send when a hold stops
 STOP_FOR = {'w': 'r', 's': 'r', 'a': 'e', 'd': 'e'}
 
+class FakeSerial:
+    """Stand-in for serial.Serial when no Arduino is connected."""
+    def write(self, data): pass
+    def close(self): pass
+
 # ── Replay mode ──────────────────────────────────────────────
 if '--replay' in sys.argv:
     csv_path = sys.argv[sys.argv.index('--replay') + 1]
-    ser = serial.Serial(PORT, BAUD)
-    time.sleep(2)  # wait for Arduino reset
-    print(f"Replaying {csv_path} ...")
+    ser = FakeSerial() if DRY_RUN else serial.Serial(PORT, BAUD)
+    if not DRY_RUN:
+        time.sleep(2)  # wait for Arduino reset
+    print(f"Replaying {csv_path} {'(dry run)' if DRY_RUN else ''}...")
 
     with open(csv_path, newline='') as f:
         reader = csv.reader(f)
@@ -63,6 +71,8 @@ if '--replay' in sys.argv:
         for cmd in one_shots:
             ser.write(cmd.encode())
 
+        if DRY_RUN:
+            print(f"  {ms:>6}ms  {state_str}")
         prev_holds = holds
 
         # Keep sending hold commands until next event
@@ -81,7 +91,7 @@ if '--replay' in sys.argv:
 # ── Normal (live) mode ───────────────────────────────────────
 from pynput import keyboard
 
-ser = serial.Serial(PORT, BAUD)
+ser = FakeSerial() if DRY_RUN else serial.Serial(PORT, BAUD)
 
 os.makedirs(LOG_DIR, exist_ok=True)
 log_name = os.path.join(LOG_DIR, f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
@@ -126,6 +136,8 @@ def log_transition(one_shots=None):
     state = '+'.join(parts) if parts else 'stop'
     ms = int((time.perf_counter() - t0) * 1000)
     log_writer.writerow([ms, state])
+    if DRY_RUN:
+        print(f"  {ms:>6}ms  {state}")
     prev_logged = cur
 
 def send_loop():
@@ -166,8 +178,9 @@ def on_press(key):
     elif key == keyboard.Key.esc:
         global running
         running = False
-        ms = int((time.perf_counter() - t0) * 1000)
-        log_writer.writerow([ms, 'stop'])
+        if prev_logged:
+            ms = int((time.perf_counter() - t0) * 1000)
+            log_writer.writerow([ms, 'stop'])
         log_file.close()
         ser.write(b'x')
         ser.close()
