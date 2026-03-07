@@ -25,7 +25,7 @@ void updateDrive() {
   if (driveDir == 1) {  // forward
     switch (gear) {
       case 1: motorA.write(180); motorB.write(180); break;
-      case 2: motorA.write(180); motorB.write(90);  break;
+      case 2: motorA.write(180); motorB.write(50);  break;
       case 3: motorA.write(180); motorB.write(0);   break;
     }
   } else {              // backward - always 1:3 reversed
