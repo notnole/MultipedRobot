@@ -1,7 +1,7 @@
 # Servo keyboard control
 # a/d = steer, q = center
 # Hold w = drive forward, hold s = drive backward, release = stop
-# 1 = slow, 2 = medium, 3 = fast (numpad works too)
+# 1 = 1:1 gear, 2 = 1:3 gear, 3 = 1:5 gear (numpad works too)
 # Esc = quit
 #
 # Logging: state transitions saved to timestamped CSV in log/.
@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 
 PORT = 'COM3'
-BAUD = 115200
+BAUD = 9600
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'log')
 DRY_RUN = '--dry-run' in sys.argv
 
@@ -32,10 +32,7 @@ STOP_FOR = {'w': 'r', 's': 'r', 'a': 'e', 'd': 'e'}
 class FakeSerial:
     """Stand-in for serial.Serial when no Arduino is connected."""
     def write(self, data): pass
-    def readline(self): return b''
     def close(self): pass
-    @property
-    def in_waiting(self): return 0
 
 # ── Replay mode ──────────────────────────────────────────────
 if '--replay' in sys.argv:
@@ -97,24 +94,16 @@ from pynput import keyboard
 ser = FakeSerial() if DRY_RUN else serial.Serial(PORT, BAUD)
 
 os.makedirs(LOG_DIR, exist_ok=True)
-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-log_name = os.path.join(LOG_DIR, f"run_{timestamp}.csv")
+log_name = os.path.join(LOG_DIR, f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
 log_file = open(log_name, 'w', newline='')
 log_writer = csv.writer(log_file)
 log_writer.writerow(['time_ms', 'command'])
-
-accel_name = os.path.join(LOG_DIR, f"accel_{timestamp}.csv")
-accel_file = open(accel_name, 'w', newline='')
-accel_writer = csv.writer(accel_file)
-accel_writer.writerow(['time_ms', 'ax_g', 'ay_g', 'az_g'])
-
 t0 = time.perf_counter()
 
 print(f"Connected. Logging to {log_name}")
-print(f"  Accel data -> {accel_name}")
 print("  a/d = steer, q = center")
 print("  Hold w = forward, hold s = backward, release = stop")
-print("  1/2/3 = speed: slow/medium/fast (numpad works too)")
+print("  1/2/3 = gear (numpad works too)")
 print("  Esc = quit")
 
 held = set()
@@ -152,7 +141,7 @@ def log_transition(one_shots=None):
     prev_logged = cur
 
 def send_loop():
-    """Send held commands to Arduino every 10ms."""
+    """Send held commands to Arduino every 20ms."""
     while running:
         if 'd' in held:
             ser.write(b'd')
@@ -164,26 +153,18 @@ def send_loop():
             ser.write(b's')
         time.sleep(0.01)
 
-ACCEL_SCALE = 16384.0  # ±2g default range
-
-def accel_read_loop():
-    """Read accelerometer lines from Arduino and log to CSV."""
+def serial_read_loop():
+    """Read lines from Arduino and print steering angle."""
     while running:
         try:
             line = ser.readline().decode('utf-8', errors='ignore').strip()
-            if line.startswith('A:'):
-                parts = line[2:].split(',')
-                if len(parts) == 3:
-                    ms = int((time.perf_counter() - t0) * 1000)
-                    ax = int(parts[0]) / ACCEL_SCALE
-                    ay = int(parts[1]) / ACCEL_SCALE
-                    az = int(parts[2]) / ACCEL_SCALE
-                    accel_writer.writerow([ms, f'{ax:.3f}', f'{ay:.3f}', f'{az:.3f}'])
-        except (ValueError, IndexError):
+            if line.startswith('S:'):
+                print(f"  Steering: {line[2:]}°")
+        except Exception:
             pass
 
 threading.Thread(target=send_loop, daemon=True).start()
-threading.Thread(target=accel_read_loop, daemon=True).start()
+threading.Thread(target=serial_read_loop, daemon=True).start()
 
 def get_char(key):
     try:
@@ -211,11 +192,9 @@ def on_press(key):
             ms = int((time.perf_counter() - t0) * 1000)
             log_writer.writerow([ms, 'stop'])
         log_file.close()
-        accel_file.close()
         ser.write(b'x')
         ser.close()
         print(f"Saved {log_name}")
-        print(f"Saved {accel_name}")
         return False
 
 def on_release(key):
