@@ -3,3 +3,8 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+__pycache__/
+*.pyc
+dashboard/runs/
+models/output/
+models/__pycache__/
