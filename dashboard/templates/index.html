@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robot Commander</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header>
+    <h1>Robot Commander</h1>
+    <nav>
+      <button class="nav-btn active" data-view="library">Library</button>
+      <button class="nav-btn" data-view="record">Record</button>
+      <button class="nav-btn" data-view="timeline">Timeline</button>
+    </nav>
+    <div id="serial-status">
+      <span id="status-dot" class="dot disconnected"></span>
+      <span id="status-text">Disconnected</span>
+      <button id="btn-connect" onclick="App.toggleConnection()">Connect</button>
+      <label class="dry-run-label">
+        <input type="checkbox" id="chk-dry-run"> Dry run
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <!-- Library View -->
+    <section id="view-library" class="view active">
+      <div class="view-header">
+        <h2>Saved Runs</h2>
+        <button onclick="Library.refresh()" class="btn-secondary">Refresh</button>
+      </div>
+      <div id="runs-list"></div>
+    </section>
+
+    <!-- Record View -->
+    <section id="view-record" class="view">
+      <div class="view-header">
+        <h2>Record a Run</h2>
+      </div>
+      <div class="record-layout">
+        <div class="key-reference">
+          <h3>Controls</h3>
+          <div class="key-grid">
+            <div class="key-item"><kbd>W</kbd> Forward</div>
+            <div class="key-item"><kbd>S</kbd> Backward</div>
+            <div class="key-item"><kbd>A</kbd> Steer Left</div>
+            <div class="key-item"><kbd>D</kbd> Steer Right</div>
+            <div class="key-item"><kbd>Q</kbd> Center Steering</div>
+            <div class="key-item"><kbd>1</kbd> Slow gear</div>
+            <div class="key-item"><kbd>2</kbd> Mid gear</div>
+            <div class="key-item"><kbd>3</kbd> Fast gear</div>
+          </div>
+          <div class="record-controls">
+            <button id="btn-start-rec" onclick="Recorder.start()" class="btn-record">Start Recording</button>
+            <button id="btn-stop-rec" onclick="Recorder.stop()" class="btn-stop" disabled>Stop & Save</button>
+          </div>
+          <div id="rec-status" class="rec-status">Ready</div>
+          <div id="rec-active-keys" class="active-keys"></div>
+        </div>
+        <div class="record-timeline">
+          <h3>Live Events</h3>
+          <div id="rec-events-list" class="events-scroll"></div>
+        </div>
+      </div>
+      <div id="focus-warning" class="focus-warning hidden">
+        Tab lost focus! Keys are not being captured.
+      </div>
+    </section>
+
+    <!-- Timeline View -->
+    <section id="view-timeline" class="view">
+      <div class="view-header">
+        <h2 id="timeline-title">No run selected</h2>
+        <div class="timeline-actions">
+          <button onclick="Timeline.save()" class="btn-primary" id="btn-save-timeline" disabled>Save Changes</button>
+          <button onclick="Timeline.revert()" class="btn-secondary" id="btn-revert" disabled>Revert</button>
+        </div>
+      </div>
+      <div class="playback-controls">
+        <button onclick="Timeline.play()" id="btn-play" disabled>Play</button>
+        <button onclick="Timeline.stop()" id="btn-stop-playback" disabled>Stop</button>
+        <span id="playback-time">0.0s</span>
+        <span id="playback-state" class="playback-state"></span>
+      </div>
+      <div class="timeline-container">
+        <canvas id="timeline-canvas"></canvas>
+      </div>
+      <div class="timeline-help">
+        Drag blocks to shift timing | Drag edges to resize | Click empty space to add | Right-click to delete | Scroll to zoom | Double-click for exact ms
+      </div>
+
+      <!-- Toggle: Keyboard / Acceleration -->
+      <div class="bottom-toggle">
+        <button class="toggle-btn active" data-panel="keyboard" onclick="Timeline.togglePanel('keyboard')">Keyboard</button>
+        <button class="toggle-btn" data-panel="accel" onclick="Timeline.togglePanel('accel')">Acceleration</button>
+      </div>
+
+      <!-- Keyboard indicator panel -->
+      <div id="panel-keyboard" class="bottom-panel active">
+      <div class="keyboard-indicator">
+        <div class="kb-section kb-movement">
+          <div class="kb-row">
+            <div class="kb-blank"></div>
+            <div class="kb-key" id="ind-w"><div class="kb-letter">W</div><div class="kb-label">FWD</div></div>
+            <div class="kb-blank"></div>
+          </div>
+          <div class="kb-row">
+            <div class="kb-key" id="ind-a"><div class="kb-letter">A</div><div class="kb-label">LEFT</div></div>
+            <div class="kb-key" id="ind-s"><div class="kb-letter">S</div><div class="kb-label">BWD</div></div>
+            <div class="kb-key" id="ind-d"><div class="kb-letter">D</div><div class="kb-label">RIGHT</div></div>
+          </div>
+        </div>
+        <div class="kb-section kb-actions">
+          <div class="kb-row">
+            <div class="kb-key kb-wide" id="ind-q"><div class="kb-letter">Q</div><div class="kb-label">CENTER</div></div>
+          </div>
+          <div class="kb-row">
+            <div class="kb-key kb-num" id="ind-1"><div class="kb-letter">1</div><div class="kb-label">SLOW</div></div>
+            <div class="kb-key kb-num" id="ind-2"><div class="kb-letter">2</div><div class="kb-label">MID</div></div>
+            <div class="kb-key kb-num" id="ind-3"><div class="kb-letter">3</div><div class="kb-label">FAST</div></div>
+          </div>
+        </div>
+      </div>
+      </div> <!-- /panel-keyboard -->
+
+      <!-- Acceleration panel -->
+      <div id="panel-accel" class="bottom-panel">
+        <div class="accel-controls">
+          <label>Overlay:</label>
+          <select id="accel-overlay-mode" onchange="Timeline.onAccelModeChange()">
+            <option value="self">This run's replays</option>
+            <option value="cross">Compare with another run</option>
+          </select>
+          <select id="accel-cross-run" class="hidden" onchange="Timeline.loadAccelData()">
+          </select>
+          <div id="accel-trace-list" class="accel-trace-list"></div>
+        </div>
+        <div class="accel-graphs">
+          <canvas id="accel-canvas-x" class="accel-canvas"></canvas>
+          <canvas id="accel-canvas-y" class="accel-canvas"></canvas>
+          <canvas id="accel-canvas-z" class="accel-canvas"></canvas>
+        </div>
+        <div class="accel-legend" id="accel-legend"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script src="/static/js/library.js"></script>
+  <script src="/static/js/recorder.js"></script>
+  <script src="/static/js/timeline.js"></script>
+</body>
+</html>
