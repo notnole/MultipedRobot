@@ -67,6 +67,10 @@
           <div id="rec-events-list" class="events-scroll"></div>
         </div>
       </div>
+      <div class="live-accel">
+        <h3>Live Acceleration</h3>
+        <canvas id="live-accel-canvas"></canvas>
+      </div>
       <div id="focus-warning" class="focus-warning hidden">
         Tab lost focus! Keys are not being captured.
       </div>
@@ -84,6 +88,7 @@
       <div class="playback-controls">
         <button onclick="Timeline.play()" id="btn-play" disabled>Play</button>
         <button onclick="Timeline.stop()" id="btn-stop-playback" disabled>Stop</button>
+        <button onclick="Timeline.resume()" id="btn-resume" class="btn-interrupt hidden">End Override</button>
         <span id="playback-time">0.0s</span>
         <span id="playback-state" class="playback-state"></span>
       </div>

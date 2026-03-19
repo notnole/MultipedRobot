@@ -40,6 +40,11 @@ const Timeline = {
   _animFrame: null,
   _currentState: 'stop',
 
+  // Interrupt
+  interrupted: false,
+  _interruptKeys: new Set(),
+  _pendingInterruptKey: null,
+
   init() {
     this.canvas = document.getElementById('timeline-canvas');
     this.ctx = this.canvas.getContext('2d');
@@ -58,12 +63,13 @@ const Timeline = {
       this._lastServerMs = data.t;
       this._lastServerTime = performance.now();
       this._currentState = data.state;
-      this.updateStateIndicator(data.state);
+      if (!this.interrupted) this.updateStateIndicator(data.state);
       if (!this._animFrame) this._startAnimLoop();
     });
     App.socket.on('replay_done', () => {
       this.playing = false;
       this._stopAnimLoop();
+      this._resetInterruptUI();
       this.playbackMs = 0;
       document.getElementById('btn-play').disabled = false;
       document.getElementById('btn-stop-playback').disabled = true;
@@ -83,10 +89,34 @@ const Timeline = {
     App.socket.on('replay_stopped', () => {
       this.playing = false;
       this._stopAnimLoop();
+      this._resetInterruptUI();
       document.getElementById('btn-play').disabled = false;
       document.getElementById('btn-stop-playback').disabled = true;
       this.updateStateIndicator('stop');
     });
+
+    // Interrupt
+    App.socket.on('replay_interrupted', () => {
+      this.interrupted = true;
+      document.getElementById('btn-resume').classList.remove('hidden');
+      document.getElementById('playback-state').textContent = 'MANUAL OVERRIDE';
+      document.getElementById('playback-state').classList.add('interrupted');
+      if (this._pendingInterruptKey) {
+        this._interruptKeys.add(this._pendingInterruptKey);
+        App.socket.emit('interrupt_key_down', { key: this._pendingInterruptKey });
+        this._pendingInterruptKey = null;
+        this._updateInterruptIndicator();
+      }
+    });
+    App.socket.on('replay_resumed', () => {
+      this.interrupted = false;
+      this._interruptKeys.clear();
+      document.getElementById('btn-resume').classList.add('hidden');
+      document.getElementById('playback-state').classList.remove('interrupted');
+    });
+
+    document.addEventListener('keydown', e => this._onInterruptKeyDown(e));
+    document.addEventListener('keyup', e => this._onInterruptKeyUp(e));
 
     window.addEventListener('resize', () => this.resize());
   },
@@ -102,8 +132,8 @@ const Timeline = {
       this.playbackMs = this._lastServerMs + elapsed;
       if (this.run) this.playbackMs = Math.min(this.playbackMs, this.run.duration_ms);
       document.getElementById('playback-time').textContent = (this.playbackMs / 1000).toFixed(1) + 's';
-      // Determine current state from events for the indicator
-      if (this.run) {
+      // Determine current state from events for the indicator (skip during interrupt)
+      if (this.run && !this.interrupted) {
         let state = 'stop';
         for (let i = this.run.events.length - 1; i >= 0; i--) {
           if (this.run.events[i].t <= this.playbackMs) {
@@ -414,6 +444,11 @@ const Timeline = {
         ctx.textAlign = 'center';
         ctx.fillText((this.playbackMs / 1000).toFixed(1) + 's', cx, h - 2);
       }
+    }
+
+    // Redraw accel graphs in sync with timeline zoom/pan
+    if (document.getElementById('panel-accel')?.classList.contains('active') && this._accelTraces.length) {
+      this._drawAccelGraphs();
     }
   },
 
@@ -782,6 +817,66 @@ const Timeline = {
     App.socket.emit('stop_replay');
   },
 
+  resume() {
+    App.socket.emit('resume_replay');
+  },
+
+  // ── Interrupt ──────────────────────────────────────
+
+  _mapKey(e) {
+    const k = e.key.toLowerCase();
+    if (['w', 'a', 's', 'd', 'q', '1', '2', '3'].includes(k)) return k;
+    return null;
+  },
+
+  _onInterruptKeyDown(e) {
+    const key = this._mapKey(e);
+    if (!key) return;
+    console.log('[Interrupt] keydown:', key, 'playing:', this.playing, 'view-active:', document.getElementById('view-timeline').classList.contains('active'));
+    if (!this.playing) return;
+    if (!document.getElementById('view-timeline').classList.contains('active')) return;
+    e.preventDefault();
+
+    // Auto-enter interrupt on first key press during replay
+    if (!this.interrupted) {
+      this._pendingInterruptKey = key;
+      App.socket.emit('interrupt_replay');
+      return;
+    }
+
+    if (this._interruptKeys.has(key)) return;
+    this._interruptKeys.add(key);
+    App.socket.emit('interrupt_key_down', { key });
+    this._updateInterruptIndicator();
+  },
+
+  _onInterruptKeyUp(e) {
+    if (!this.playing || !this.interrupted) return;
+    if (!document.getElementById('view-timeline').classList.contains('active')) return;
+    const key = this._mapKey(e);
+    if (!key) return;
+    e.preventDefault();
+    this._interruptKeys.delete(key);
+    App.socket.emit('interrupt_key_up', { key });
+    this._updateInterruptIndicator();
+  },
+
+  _updateInterruptIndicator() {
+    const allKeys = ['w', 'a', 's', 'd', 'q', '1', '2', '3'];
+    for (const k of allKeys) {
+      const el = document.getElementById(`ind-${k}`);
+      if (el) el.classList.toggle('active', this._interruptKeys.has(k));
+    }
+  },
+
+  _resetInterruptUI() {
+    this.interrupted = false;
+    this._interruptKeys.clear();
+    this._pendingInterruptKey = null;
+    document.getElementById('btn-resume')?.classList.add('hidden');
+    document.getElementById('playback-state')?.classList.remove('interrupted');
+  },
+
   // ── Panel Toggle (Keyboard / Acceleration) ──────────
 
   togglePanel(panel) {
@@ -912,15 +1007,19 @@ const Timeline = {
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Find data range
+      // Map time to x using the same zoom/pan as the timeline
+      const tToX = (t) => (t - this.panX) * this.zoom;
+      const visStart = this.panX;
+      const visEnd = this.panX + w / this.zoom;
+
+      // Find data range (only for visible portion)
       let minVal = -0.5, maxVal = 0.5;
-      let maxT = this.run.duration_ms || 1000;
       for (const trace of this._accelTraces) {
         for (const s of trace.data) {
+          if (s.t < visStart || s.t > visEnd) continue;
           const v = s[axis.key];
           if (v < minVal) minVal = v;
           if (v > maxVal) maxVal = v;
-          if (s.t > maxT) maxT = s.t;
         }
       }
       const range = maxVal - minVal || 1;
@@ -932,9 +1031,6 @@ const Timeline = {
       ctx.fillStyle = '#08080e';
       ctx.fillRect(0, 0, w, h);
 
-      // Grid
-      ctx.strokeStyle = 'rgba(139,92,246,0.08)';
-      ctx.lineWidth = 0.5;
       // Zero line
       const zeroY = h - ((0 - minVal) / (maxVal - minVal)) * h;
       ctx.strokeStyle = 'rgba(255,255,255,0.1)';
@@ -964,7 +1060,8 @@ const Timeline = {
         ctx.beginPath();
         let first = true;
         for (const s of trace.data) {
-          const x = (s.t / maxT) * w;
+          const x = tToX(s.t);
+          if (x < -2 || x > w + 2) { first = true; continue; }
           const y = h - ((s[axis.key] - minVal) / (maxVal - minVal)) * h;
           if (first) { ctx.moveTo(x, y); first = false; }
           else ctx.lineTo(x, y);
@@ -975,13 +1072,15 @@ const Timeline = {
 
       // Playback cursor
       if (this.playbackMs > 0 || this.playing) {
-        const cx = (this.playbackMs / maxT) * w;
-        ctx.strokeStyle = '#8b5cf6';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(cx, 0);
-        ctx.lineTo(cx, h);
-        ctx.stroke();
+        const cx = tToX(this.playbackMs);
+        if (cx >= 0 && cx <= w) {
+          ctx.strokeStyle = '#8b5cf6';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(cx, 0);
+          ctx.lineTo(cx, h);
+          ctx.stroke();
+        }
       }
     }
   },

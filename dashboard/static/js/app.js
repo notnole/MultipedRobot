@@ -112,10 +112,12 @@ const App = {
       dot.className = 'dot connected';
       text.textContent = isDryRun ? 'Dry Run' : 'Connected';
       btn.textContent = 'Disconnect';
+      btn.disabled = false;
     } else {
       dot.className = 'dot disconnected';
       text.textContent = 'Disconnected';
       btn.textContent = 'Connect';
+      btn.disabled = false;
     }
   },
 };

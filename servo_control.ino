@@ -1,8 +1,8 @@
-// Servo control - three servos + MPU6050 accelerometer
+// Servo control - three servos
 // Steering: MG996R (positional) on pin 7: a=left, d=right, q=center
 // Motor A (ring):  360 on pin 6
 // Motor B (sun):   360 on pin 5
-// Gear ratios: 1=slow(1:5), 2=mid(1:3), 3=fast(1:1)
+// Gear ratios: 1=1:1, 2=1:3, 3=1:5
 // MPU6050: SDA=A4, SCL=A5 (standard I2C)
 // IMPORTANT: power servos from external 5V supply, NOT from Arduino
 
@@ -13,14 +13,13 @@ Servo steerServo;   // positional on pin 7
 Servo motorA;       // continuous on pin 6 (ring gear)
 Servo motorB;       // continuous on pin 5 (sun gear)
 
-int angle = 79;
+int angle = 90;
 int direction = 0;
-int gear = 1;       // current gear mode (1, 2, or 3)
+int gear = 3;       // current gear mode (1, 2, or 3)
 int driveDir = 0;   // 0=stop, 1=forward, -1=backward
 
 // MPU6050
 const int MPU_ADDR = 0x68;
-bool mpuReady = false;
 unsigned long lastAccelSend = 0;
 const unsigned long ACCEL_INTERVAL = 20; // ms between accel readings
 
@@ -30,26 +29,16 @@ void updateDrive() {
     motorB.write(90);
     return;
   }
-  int dir = (driveDir == 1) ? 1 : -1;
-  if (gear == 1) {        // slow (1:5) - A forward, B reverse
-    motorA.write(90 + dir * 90);
-    motorB.write(90 - dir * 90);
-  } else if (gear == 2) { // mid (1:3) - A forward, B stop
-    motorA.write(90 + dir * 90);
-    motorB.write(90);
-  } else {                // fast (1:1) - both forward
-    motorA.write(90 + dir * 90);
-    motorB.write(90 + dir * 90);
+  if (driveDir == 1) {  // forward
+    switch (gear) {
+      case 1: motorA.write(100); motorB.write(100); break;
+      case 2: motorA.write(150); motorB.write(150);  break;
+      case 3: motorA.write(180); motorB.write(180);   break;
+    }
+  } else {              // backward - always 1:3 reversed
+    motorA.write(0);
+    motorB.write(0);
   }
-}
-
-void setupMPU() {
-  Wire.begin();
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B);  // PWR_MGMT_1
-  Wire.write(0);     // wake up
-  byte err = Wire.endTransmission(true);
-  mpuReady = (err == 0);
 }
 
 void setup() {
@@ -60,15 +49,21 @@ void setup() {
   motorA.write(90);
   motorB.write(90);
   Serial.begin(9600);
-  setupMPU();
+
+  // Init MPU6050
+  Wire.begin();
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B);  // PWR_MGMT_1
+  Wire.write(0);     // wake up
+  Wire.endTransmission(true);
 }
 
 void loop() {
   while (Serial.available()) {
     char key = Serial.read();
-    if (key == 'd') direction = 1;
-    else if (key == 'a') direction = -1;
-    else if (key == 'q') { direction = 0; angle = 79; }
+    if (key == 'd') direction = 3;
+    else if (key == 'a') direction = -3;
+    else if (key == 'q') { direction = 0; angle = 90; }
     else if (key == 'e') direction = 0;
     else if (key == 'w') { driveDir = 1; updateDrive(); }
     else if (key == 's') { driveDir = -1; updateDrive(); }
@@ -81,17 +76,16 @@ void loop() {
 
   int prevAngle = angle;
   angle += direction;
-  if (angle > 145) angle = 145;
-  if (angle < 20) angle = 20;
+  if (angle > 130) angle = 132;
+  if (angle < 36) angle = 34;
   steerServo.write(angle);
   if (angle != prevAngle) {
     Serial.print("S:");
     Serial.println(angle);
   }
-
   // Send accelerometer data every 20ms
   unsigned long now = millis();
-  if (mpuReady && now - lastAccelSend >= ACCEL_INTERVAL) {
+  if (now - lastAccelSend >= ACCEL_INTERVAL) {
     lastAccelSend = now;
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x3B);

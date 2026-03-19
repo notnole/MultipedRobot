@@ -49,6 +49,11 @@ class SerialBridge:
         self._replay_accel = []  # accel samples during replay
         self._replay_t0 = 0
 
+        # Interrupt state
+        self._replay_interrupted = threading.Event()
+        self._interrupt_held = set()
+        self._interrupt_hold_stop = threading.Event()
+
         # Serial reader
         self._reader_thread = None
         self._reader_stop = threading.Event()
@@ -67,11 +72,13 @@ class SerialBridge:
             self.dry_run = dry_run
             if dry_run:
                 self.ser = FakeSerial()
+                print(f'[SerialBridge] Connected in DRY-RUN mode (no serial)', flush=True)
             else:
                 import serial
                 try:
                     self.ser = serial.Serial(port, baud, timeout=0.1)
                     time.sleep(2)  # wait for Arduino reset
+                    print(f'[SerialBridge] Connected to {port} at {baud} baud', flush=True)
                 except Exception as e:
                     return f'Could not connect to Arduino on {port}. Is it plugged in? ({e})'
             self.connected = True
@@ -107,6 +114,9 @@ class SerialBridge:
                     if not line:
                         continue
                     if line.startswith('A:'):
+                        if not hasattr(self, '_accel_seen'):
+                            self._accel_seen = True
+                            print(f'[SerialBridge] First accel data: {line}', flush=True)
                         self._handle_accel_line(line)
                     elif self._serial_callback:
                         self._serial_callback(line)
@@ -142,9 +152,11 @@ class SerialBridge:
     # ── Commands ────────────────────────────────────────────
 
     def send_command(self, char):
-        if self.ser:
-            with self._lock:
-                self.ser.write(char.encode() if isinstance(char, str) else char)
+        if not self.ser:
+            print(f'[SerialBridge] WARN: no serial port, dropping command: {char}')
+            return
+        data = char.encode() if isinstance(char, str) else char
+        self.ser.write(data)
 
     def send_state(self, state_str, prev_holds=None):
         """Send commands to transition to a new state. Returns new hold set."""
@@ -191,6 +203,7 @@ class SerialBridge:
     def record_key_down(self, key):
         if not self.recording:
             return None
+        print(f'[SerialBridge] key_down: {key} (ser={type(self.ser).__name__})')
         if key in HOLD_CMDS:
             self._rec_held.add(key)
             self.send_command(key)
@@ -286,6 +299,7 @@ class SerialBridge:
     def start_replay(self, events, progress_cb=None, run_id=None):
         if self.replaying:
             return False
+        print(f'[SerialBridge] Starting replay: {len(events)} events (ser={type(self.ser).__name__})')
         self.replaying = True
         self._replay_stop.clear()
         self._replay_accel = []
@@ -315,7 +329,12 @@ class SerialBridge:
             if self._replay_stop.is_set():
                 break
 
-            prev_holds = self.send_state(state_str, prev_holds)
+            if not self._replay_interrupted.is_set():
+                prev_holds = self.send_state(state_str, prev_holds)
+            else:
+                # Track what state WOULD be so resume transitions correctly
+                cmds = set(state_str.split('+')) if state_str != 'stop' else set()
+                prev_holds = cmds & HOLD_CMDS
 
             if progress_cb:
                 progress_cb(i, ms, state_str)
@@ -326,8 +345,9 @@ class SerialBridge:
                 while (time.perf_counter() - start) * 1000 < next_ms - 5:
                     if self._replay_stop.is_set():
                         break
-                    for h in prev_holds:
-                        self.send_command(h)
+                    if not self._replay_interrupted.is_set():
+                        for h in prev_holds:
+                            self.send_command(h)
                     time.sleep(0.01)
 
         self.send_command('x')
@@ -359,12 +379,60 @@ class SerialBridge:
         save_run(run)
 
     def stop_replay(self):
+        if self._replay_interrupted.is_set():
+            self._interrupt_hold_stop.set()
+            self._interrupt_held.clear()
+            self._replay_interrupted.clear()
         self._replay_stop.set()
         self.send_command('x')
         self.replaying = False
         self._replay_t0 = 0
         if self._replay_accel and self._replay_run_id:
             self._save_replay_accel()
+
+    # ── Interrupt ────────────────────────────────────────────
+
+    def interrupt_replay(self):
+        """Enter interrupt: suppress replay commands, allow manual control."""
+        if not self.replaying:
+            return False
+        self._replay_interrupted.set()
+        self._interrupt_held = set()
+        self.send_command('x')  # stop motors from replay's last command
+        self._interrupt_hold_stop = threading.Event()
+        threading.Thread(target=self._interrupt_hold_loop, daemon=True).start()
+        return True
+
+    def resume_replay(self):
+        """Exit interrupt: stop manual commands, let replay resume."""
+        if not self._replay_interrupted.is_set():
+            return False
+        self._interrupt_hold_stop.set()
+        for h in list(self._interrupt_held):
+            self.send_command(STOP_FOR[h])
+        self._interrupt_held.clear()
+        self._replay_interrupted.clear()
+        return True
+
+    def interrupt_key_down(self, key):
+        if not self._replay_interrupted.is_set():
+            return
+        if key in HOLD_CMDS:
+            self._interrupt_held.add(key)
+        self.send_command(key)
+
+    def interrupt_key_up(self, key):
+        if not self._replay_interrupted.is_set():
+            return
+        if key in HOLD_CMDS:
+            self._interrupt_held.discard(key)
+            self.send_command(STOP_FOR[key])
+
+    def _interrupt_hold_loop(self):
+        while not self._interrupt_hold_stop.is_set():
+            for h in list(self._interrupt_held):
+                self.send_command(h)
+            time.sleep(0.01)
 
     # ── Status ──────────────────────────────────────────────
 
@@ -374,6 +442,7 @@ class SerialBridge:
             'dry_run': self.dry_run,
             'recording': self.recording,
             'replaying': self.replaying,
+            'interrupted': self._replay_interrupted.is_set(),
         }
 
 

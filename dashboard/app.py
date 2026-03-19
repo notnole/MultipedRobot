@@ -20,7 +20,7 @@ from serial_bridge import (
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'robot-commander'
-socketio = SocketIO(app, cors_allowed_origins='*')
+socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
 bridge = SerialBridge()
 
@@ -203,6 +203,7 @@ def api_serial_connect():
     result = bridge.connect(port, baud, dry_run)
     if result is True:
         bridge.set_serial_callback(lambda line: socketio.emit('serial_data', {'line': line}))
+        bridge.set_accel_callback(lambda ax, ay, az: socketio.emit('accel_live', {'x': ax, 'y': ay, 'z': az}))
         return jsonify({'ok': True, 'status': bridge.get_status()})
     return jsonify({'error': str(result)}), 500
 
@@ -286,6 +287,27 @@ def ws_start_replay(data):
 def ws_stop_replay():
     bridge.stop_replay()
     emit('replay_stopped', {})
+
+
+# ── WebSocket: Interrupt ───────────────────────────────────
+
+@socketio.on('interrupt_replay')
+def ws_interrupt_replay():
+    if bridge.interrupt_replay():
+        emit('replay_interrupted', {})
+
+@socketio.on('resume_replay')
+def ws_resume_replay():
+    if bridge.resume_replay():
+        emit('replay_resumed', {})
+
+@socketio.on('interrupt_key_down')
+def ws_interrupt_key_down(data):
+    bridge.interrupt_key_down(data.get('key', ''))
+
+@socketio.on('interrupt_key_up')
+def ws_interrupt_key_up(data):
+    bridge.interrupt_key_up(data.get('key', ''))
 
 
 # ── Main ────────────────────────────────────────────────────
