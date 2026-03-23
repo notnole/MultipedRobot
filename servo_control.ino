@@ -31,13 +31,13 @@ void updateDrive() {
   }
   if (driveDir == 1) {  // forward
     switch (gear) {
-      case 1: motorA.write(100); motorB.write(100); break;
-      case 2: motorA.write(150); motorB.write(150);  break;
-      case 3: motorA.write(180); motorB.write(180);   break;
+      case 1: motorA.write(80); motorB.write(80); break;
+      case 2: motorA.write(30); motorB.write(30);  break;
+      case 3: motorA.write(0); motorB.write(0);   break;
     }
-  } else {              // backward - always 1:3 reversed
-    motorA.write(0);
-    motorB.write(0);
+  } else {              // backward - always reversed
+    motorA.write(180);
+    motorB.write(180);
   }
 }
 
@@ -61,8 +61,8 @@ void setup() {
 void loop() {
   while (Serial.available()) {
     char key = Serial.read();
-    if (key == 'd') direction = 3;
-    else if (key == 'a') direction = -3;
+    if (key == 'd') direction = -3;
+    else if (key == 'a') direction = 3;
     else if (key == 'q') { direction = 0; angle = 90; }
     else if (key == 'e') direction = 0;
     else if (key == 'w') { driveDir = 1; updateDrive(); }
